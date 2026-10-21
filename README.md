@@ -91,6 +91,25 @@ cargo test --manifest-path src-tauri\Cargo.toml
 绿色 exe 需要 WebView2 运行时（Win11 自带）。当前不打包 NSIS 安装包（`bundle.active=false`），
 避免构建期去下载打包工具。
 
+## 这个仓库之外还需要什么
+
+登录器只是半套东西，缺下面任一项都会掉功能，不会静默假装成功：
+
+1. **服务端必须含 FG201 GM 接口**（`Server-70s3a3/src/Tools/VmTestKit/GM-Console-FG201.cs` 与配套的
+   `Batch-Service-FG.cs`/`Progression-FG.cs`/`Dungeon-Gate-Protocol.cs` 改动，在那个仓库里，不在本仓库）。
+   没有它：`TestTools/` 下不会有人处理 `.gm.xml`，登录器会在 6 秒后报
+   "服务端 6 秒内没有回执…"，其余面板（起服、查存档）仍可用。
+2. **目录结构**：默认按 `<根>/Server-70s3a3/build/stable`、`<根>/local-run/DNF70-batch-test-FG`、
+   `<根>/地下城与勇士/DNF70_v50.exe` 推断；不一样就在设置页改。存档目录名必须仍是
+   `DNF70-batch-test-FG`（服务端硬要求），入口端口必须落在 17000..17999。
+3. **npm 依赖**：`node_modules/` 不入库。本机是指向 90US 登录器仓库的 junction，换机器请
+   `npm install`（需要网络）。Rust 依赖走 `~/.cargo` 缓存，`--offline` 可用是因为版本被钉在
+   `src-tauri/Cargo.lock`。
+4. **游戏本体**：`DNF70_v50.exe`、`Script.pvf` 等原版客户端与 PVF 不在任何仓库里，需自备；
+   登录器只负责带参数拉起它。
+5. **pvfUtility（可选）**：物品中文名来自本机 `127.0.0.1:27000` 的读 PVF 服务；没起时道具面板
+   只显示 ID 与类型，不影响发放。
+
 ## 配置
 
 `%LOCALAPPDATA%\70S3A3单机启动器\config.json`：交付根目录、存档目录、日志目录、客户端目录/可执行文件、
