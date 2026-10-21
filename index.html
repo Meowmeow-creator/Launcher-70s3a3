@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>70S3A3 单机启动器</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <nav class="rail" aria-label="模块导航">
+        <div class="rail-brand">
+          <strong>70S3A3</strong>
+          <span>单机启动器</span>
+        </div>
+        <button class="rail-tab active" data-page="service" type="button">服务端</button>
+        <button class="rail-tab" data-page="character" type="button">角色</button>
+        <button class="rail-tab" data-page="quests" type="button">任务</button>
+        <button class="rail-tab" data-page="items" type="button">道具</button>
+        <button class="rail-tab" data-page="dungeon" type="button">副本</button>
+        <button class="rail-tab" data-page="settings" type="button">设置</button>
+        <div class="rail-foot">
+          <span id="mode-badge" class="badge">未连接</span>
+          <button id="refresh-button" class="ghost" type="button">刷新</button>
+        </div>
+      </nav>
+
+      <main class="work">
+        <header class="statusbar">
+          <div class="lamps">
+            <span class="lamp"><i id="lamp-channel" class="dot off"></i>频道 <b id="channel-port">7002</b></span>
+            <span class="lamp"><i id="lamp-entrance" class="dot off"></i>入口 <b id="entrance-port">17001</b></span>
+            <span class="lamp"><i id="lamp-gm" class="dot off"></i>GM 通道 <b id="gm-pid">-</b></span>
+            <span class="lamp"><i id="lamp-client" class="dot off"></i>客户端 <b id="client-pids">未运行</b></span>
+          </div>
+          <div class="who">
+            <span id="role-summary">角色 -</span>
+          </div>
+        </header>
+
+        <section id="service-page" class="page">
+          <div class="row">
+            <button id="start-server" class="primary" type="button">一键启动服务端</button>
+            <button id="stop-server" type="button">停止服务端</button>
+            <button id="launch-client" type="button">启动游戏客户端</button>
+            <button id="reload-logs" class="ghost" type="button">读日志尾部</button>
+          </div>
+          <div id="server-issue" class="alert" hidden></div>
+          <div class="grid2">
+            <table class="kv" id="service-table"></table>
+            <table class="kv" id="paths-table"></table>
+          </div>
+          <details class="logs" open>
+            <summary>频道服日志尾部</summary>
+            <pre id="channel-log" class="log"></pre>
+          </details>
+        </section>
+
+        <section id="character-page" class="page" hidden>
+          <div class="grid2 wide-left">
+            <div>
+              <h2>账号与角色</h2>
+              <table class="list" id="roles-table"></table>
+              <h2>存档快照</h2>
+              <table class="kv" id="snapshot-table"></table>
+            </div>
+            <div>
+              <h2>角色操作</h2>
+              <p class="hint" id="character-gate">服务空闲时写入存档，下次进入城镇生效；客户端在城镇里连接时会即时推送。</p>
+              <div class="field">
+                <label for="level-input">设置等级（1-70，按该级门槛写满经验）</label>
+                <div class="inline">
+                  <input id="level-input" type="number" min="1" max="70" step="1" value="70" />
+                  <button data-gm="level" type="button">应用</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>转职（鬼剑士一次转职，写入 grow 字节并补齐职业技能）</label>
+                <div class="inline wrap">
+                  <button data-gm="promote" data-grow="1" type="button">剑魂</button>
+                  <button data-gm="promote" data-grow="2" type="button">鬼泣</button>
+                  <button data-gm="promote" data-grow="3" type="button">狂战士</button>
+                  <button data-gm="promote" data-grow="4" type="button">阿修罗</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>觉醒（一次觉醒，需要已转职）</label>
+                <div class="inline">
+                  <button data-gm="awaken" type="button">一次觉醒</button>
+                  <span id="grow-state" class="muted"></span>
+                </div>
+              </div>
+              <div class="field">
+                <label for="gm-result">最近回执</label>
+                <textarea id="gm-result" rows="7" readonly spellcheck="false"></textarea>
+              </div>
+            </div>
+          </div>
+        </section>
+
+                <section id="quests-page" class="page" hidden>
+          <div class="row">
+            <h2 style="margin:0">已接任务</h2>
+            <button id="quest-refresh" class="ghost" type="button">重新读取任务</button>
+            <span id="quest-read-state" class="muted"></span>
+          </div>
+          <table class="list selectable" id="active-quests"></table>
+
+          <h2>完成选定任务</h2>
+          <p class="hint">服务端按任务表结算奖励（经验/金币/物品/称号/转职标记）；GM 只把目标计数器写成已完成，并按需补齐提交物。</p>
+          <div class="field">
+            <label for="quest-selected">任务（点左侧行自动填，也可直接输入任务 ID）</label>
+            <input id="quest-selected" placeholder="例如 806" />
+          </div>
+          <div class="field inline wrap">
+            <label class="check"><input id="quest-accept" type="checkbox" />未接取时自动接取</label>
+            <label class="check"><input id="quest-topup" type="checkbox" />自动补齐提交物</label>
+            <label class="narrow">奖励序号<input id="quest-selection" type="number" min="0" max="9" value="0" /></label>
+            <button data-gm="quest-complete" class="primary" type="button">完成选定任务</button>
+            <button data-gm="quest-accept" type="button">接取该任务</button>
+          </div>
+        </section>
+
+<section id="items-page" class="page" hidden>
+          <div class="grid2 wide-left">
+            <div>
+              <h2>当前背包</h2>
+              <table class="list" id="inventory-table"></table>
+            </div>
+            <div>
+              <h2>发放道具</h2>
+              <p class="hint">名称由本机 pvfUtility（127.0.0.1:27000）按 stackable/equipment 索引现取；服务没起时只显示 ID 与类型。</p>
+              <div class="inline">
+                <input id="item-query" placeholder="物品 ID 或类型（如 材料）" />
+                <button id="item-find" type="button">检索</button>
+              </div>
+              <div class="field">
+                <label for="item-id">物品 ID</label>
+                <input id="item-id" type="number" min="1" step="1" placeholder="例如 1000" />
+              </div>
+              <div class="field inline">
+                <label class="narrow">数量<input id="item-count" type="number" min="1" max="1000000" value="1" /></label>
+                <label class="check"><input id="item-shortcut" type="checkbox" />发到快捷栏</label>
+                <button data-gm="item" class="primary" type="button">发放</button>
+              </div>
+              <table class="list" id="item-results"></table>
+            </div>
+          </div>
+        </section>
+
+        <section id="dungeon-page" class="page" hidden>
+          <div id="dungeon-state" class="alert warn">需要客户端连上频道服并进入副本。</div>
+          <h2>一键清图（杀死当前房间的全部怪物）</h2>
+          <p class="hint">走服务端既有击杀登记：经验、掉落、任务计数都会照常结算。<b>该功能尚未在真实客户端里逐项目测</b>，先在副本里小范围试。</p>
+          <div class="field">
+            <label for="kill-scope">清怪范围上限（只，避免一次性打满全房间）</label>
+            <div class="inline">
+              <input id="kill-scope" type="number" min="1" max="60" value="20" />
+              <button id="kill-all" type="button">一键清图</button>
+            </div>
+          </div>
+          <h2>自动拾取</h2>
+          <p class="hint">常开模式由服务端记住：开着时每只怪掉落都会立即入库（含金币），背包满则该条留在地上记 AUTO_PICKUP_DEFERRED；开关状态写进存档目录的 TestTools/gm-toggles.xml，重启服务端也保留。</p>
+          <div class="row">
+            <button id="autopick-toggle" type="button">自动拾取：读取中</button>
+            <button id="pick-all" type="button">拾取当前地上条目</button>
+          </div>
+          <table class="kv" id="dungeon-table"></table>
+          <h2>地上条目</h2>
+          <table class="list" id="ground-table"></table>
+        </section>
+
+        <section id="settings-page" class="page" hidden>
+          <div class="grid2">
+            <div>
+              <h2>路径</h2>
+              <div class="field"><label for="cfg-root">交付根目录</label><div class="inline"><input id="cfg-root" /><button data-pick="cfg-root" type="button">选择</button></div></div>
+              <div class="field"><label for="cfg-store">存档目录（必须叫 DNF70-batch-test-FG）</label><div class="inline"><input id="cfg-store" /><button data-pick="cfg-store" type="button">选择</button></div></div>
+              <div class="field"><label for="cfg-logs">日志目录</label><div class="inline"><input id="cfg-logs" /><button data-pick="cfg-logs" type="button">选择</button></div></div>
+              <div class="field"><label for="cfg-client-dir">客户端目录</label><div class="inline"><input id="cfg-client-dir" /><button data-pick="cfg-client-dir" type="button">选择</button></div></div>
+              <div class="field"><label for="cfg-client-exe">客户端可执行文件</label><input id="cfg-client-exe" placeholder="DNF70_v50.exe" /></div>
+            </div>
+            <div>
+              <h2>端口与启动参数</h2>
+              <div class="field inline">
+                <label class="narrow">频道端口<input id="cfg-channel-port" type="number" value="7002" /></label>
+                <label class="narrow">入口端口（17000-17999）<input id="cfg-entrance-port" type="number" value="17001" /></label>
+              </div>
+              <div class="field">
+                <label for="cfg-arguments">客户端启动参数（整串作为一个参数传入）</label>
+                <input id="cfg-arguments" spellcheck="false" />
+                <button id="fill-arguments" class="ghost" type="button">按当前入口端口生成</button>
+              </div>
+              <div class="field">
+                <label class="check"><input id="cfg-one-hit" type="checkbox" />带上测试便利 DNF70_TEST_ONE_HIT_KILL=1（秒怪）</label>
+              </div>
+              <h2>一键清图全局快捷键</h2>
+              <p class="hint">游戏窗口有焦点时也能按；按下即对服务端发一次 dungeon-killall（服务端每 350ms 结算一只怪，重复按会被“上一次还在结算中”挡住）。</p>
+              <div class="field inline">
+                <input id="cfg-hotkey" readonly placeholder="点击这里然后按下组合键" />
+                <button id="hotkey-set" type="button">登记</button>
+                <button id="hotkey-clear" type="button">清除</button>
+                <span id="hotkey-state" class="muted"></span>
+              </div>
+              <div class="row">
+                <button id="save-config" class="primary" type="button">保存配置</button>
+              </div>
+              <p class="hint">配置写在 %LOCALAPPDATA%\\70S3A3单机启动器\\config.json，不进仓库。</p>
+              <div id="config-issue" class="alert" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <footer class="ticker">
+          <span id="ticker">就绪。</span>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>

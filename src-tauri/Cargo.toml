@@ -1,0 +1,19 @@
+[package]
+name = "launcher-70s3a3"
+version = "0.1.0"
+description = "70S3A3 单机启动器：一键起服、账号角色查询与 GM 控制台"
+authors = ["70S3A3"]
+edition = "2021"
+
+[lib]
+name = "launcher_70s3a3_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
