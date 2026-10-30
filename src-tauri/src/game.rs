@@ -5,6 +5,39 @@ use std::os::windows::process::CommandExt;
 use super::config::Config;
 use super::service::{CREATE_NO_WINDOW, DETACHED_PROCESS};
 
+/// 客户端启动瞬间会枚举并最小化其它程序的窗口（打包在客户端内部的保护逻辑，
+/// 不经过普通的 ShowWindow 路径，外部补丁拦不住）。先拉起 window-guard.exe
+/// 让它快照当前可见窗口，客户端起来后的十几秒内由它把被最小化的窗口恢复，
+/// 恢复用 SW_SHOWNOACTIVATE，不会把焦点抢走。
+fn spawn_window_guard(config: &Config) {
+    let launcher_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|dir| dir.to_path_buf()));
+    let mut candidates = vec![
+        config.client_dir.join("window-guard.exe"),
+        config.bin_dir().join("window-guard.exe"),
+    ];
+    if let Some(dir) = launcher_dir {
+        candidates.push(dir.join("window-guard.exe"));
+    }
+    let Some(guard) = candidates.into_iter().find(|path| path.is_file()) else {
+        return;
+    };
+    let spawned = std::process::Command::new(&guard)
+        .arg("--watch")
+        .arg(&config.client_exe)
+        .arg("--skip-pid")
+        .arg(std::process::id().to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if spawned.is_ok() {
+        // 给守护进程留出快照窗口的时间，再启动客户端
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+}
+
 pub fn validate(config: &Config) -> Result<std::path::PathBuf, String> {
     if config.client_dir.as_os_str().is_empty() || !config.client_dir.is_dir() {
         return Err(format!("找不到客户端目录：{}", config.client_dir.display()));
@@ -46,6 +79,7 @@ pub fn launch(config: &Config) -> Result<Value, String> {
             config.launch_arguments, config.entrance_port
         ));
     }
+    spawn_window_guard(config);
     let mut command = std::process::Command::new(&executable);
     command
         .current_dir(&config.client_dir)

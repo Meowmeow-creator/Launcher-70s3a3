@@ -62,9 +62,12 @@
           <div class="grid2 wide-left">
             <div>
               <h2>账号与角色</h2>
-              <table class="list" id="roles-table"></table>
-              <h2>存档快照</h2>
-              <table class="kv" id="snapshot-table"></table>
+              <div class="field">
+                <label for="role-target">GM 目标角色（写入都落在这一个角色上）</label>
+                <select id="role-target"></select>
+                <p class="hint" id="role-target-state"></p>
+              </div>
+              <table class="list selectable" id="roles-table"></table>
             </div>
             <div>
               <h2>角色操作</h2>
@@ -77,24 +80,37 @@
                 </div>
               </div>
               <div class="field">
-                <label>转职（鬼剑士一次转职，写入 grow 字节并补齐职业技能）</label>
-                <div class="inline wrap">
-                  <button data-gm="promote" data-grow="1" type="button">剑魂</button>
-                  <button data-gm="promote" data-grow="2" type="button">鬼泣</button>
-                  <button data-gm="promote" data-grow="3" type="button">狂战士</button>
-                  <button data-gm="promote" data-grow="4" type="button">阿修罗</button>
+                <label for="cash-amount">发放点券（加进商城点券，服务端按 WalletLimit 上限截断）</label>
+                <div class="inline">
+                  <input id="cash-amount" type="number" min="1" max="99999999" step="1" value="1000" />
+                  <button data-gm="cash" type="button">发放</button>
                 </div>
+              </div>
+              <div class="field">
+                <label for="gold-amount">发放金币（加进角色金币，服务端按 WalletLimit 上限拒写）</label>
+                <div class="inline">
+                  <input id="gold-amount" type="number" min="1" max="99999999" step="1" value="100000" />
+                  <button data-gm="gold" type="button">发放</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>疲劳值（一键恢复满 156 点，黑钻加成部分同时重置；角色在副本里时需先回城）</label>
+                <div class="inline">
+                  <button data-gm="fatigue" type="button">恢复满疲劳</button>
+                  <span id="fatigue-state" class="muted"></span>
+                </div>
+              </div>
+              <div class="field">
+                <label id="promote-label">转职（一次转职，写入 grow 字节并按职业补齐职业技能）</label>
+                <div class="inline wrap" id="promote-options"></div>
+                <p class="hint" id="promote-hint" hidden></p>
               </div>
               <div class="field">
                 <label>觉醒（一次觉醒，需要已转职）</label>
                 <div class="inline">
-                  <button data-gm="awaken" type="button">一次觉醒</button>
+                  <button data-gm="awaken" id="awaken-button" type="button">一次觉醒</button>
                   <span id="grow-state" class="muted"></span>
                 </div>
-              </div>
-              <div class="field">
-                <label for="gm-result">最近回执</label>
-                <textarea id="gm-result" rows="7" readonly spellcheck="false"></textarea>
               </div>
             </div>
           </div>
@@ -131,7 +147,7 @@
             </div>
             <div>
               <h2>发放道具</h2>
-              <p class="hint">名称由本机 pvfUtility（127.0.0.1:27000）按 stackable/equipment 索引现取；服务没起时只显示 ID 与类型。</p>
+              <p class="hint">名称由本机 pvfUtility（127.0.0.1:27000）按 stackable/equipment 索引现取；使用名字服务请先用 PVFUtility 打开 script 文件，没打开时这里只显示 ID 与类型，不影响发放。</p>
               <div class="inline">
                 <input id="item-query" placeholder="物品 ID 或类型（如 材料）" />
                 <button id="item-find" type="button">检索</button>
@@ -145,6 +161,16 @@
                 <label class="check"><input id="item-shortcut" type="checkbox" />发到快捷栏</label>
                 <button data-gm="item" class="primary" type="button">发放</button>
               </div>
+              <div class="field">
+                <label for="item-upgrade">强化与品质（都可留空，留空就是普通发放）</label>
+                <div class="inline wrap">
+                  <input id="item-upgrade" type="number" min="0" max="31" placeholder="强化(空=不改)" />
+                  <input id="item-seed" type="number" min="0" max="2147483647" placeholder="品质种子(空=随机)" />
+                  <input id="item-reseal" type="number" min="0" max="7" placeholder="再封印次数" />
+                  <label class="check"><input id="item-sealed" type="checkbox" />封印</label>
+                </div>
+                <p class="hint">强化与品质只对装备类物品生效（服务端 kind 4 武器/装备、kind 8 装扮类装备），其它种类带了会被服务端拒；再封印与封印只认 kind 4。这套引擎的装备没有增幅字段（Ability 只给时装用，装备必须为 0），所以这里不做增幅。</p>
+              </div>
               <table class="list" id="item-results"></table>
             </div>
           </div>
@@ -153,7 +179,6 @@
         <section id="dungeon-page" class="page" hidden>
           <div id="dungeon-state" class="alert warn">需要客户端连上频道服并进入副本。</div>
           <h2>一键清图（杀死当前房间的全部怪物）</h2>
-          <p class="hint">走服务端既有击杀登记：经验、掉落、任务计数都会照常结算。<b>该功能尚未在真实客户端里逐项目测</b>，先在副本里小范围试。</p>
           <div class="field">
             <label for="kill-scope">清怪范围上限（只，避免一次性打满全房间）</label>
             <div class="inline">
@@ -161,8 +186,17 @@
               <button id="kill-all" type="button">一键清图</button>
             </div>
           </div>
+          <div class="field">
+            <label for="cfg-hotkey">一键清图全局快捷键（游戏有焦点时也能按）</label>
+            <div class="inline">
+              <input id="cfg-hotkey" readonly placeholder="点击这里然后按下组合键" />
+              <button id="hotkey-set" type="button">登记</button>
+              <button id="hotkey-clear" type="button">清除</button>
+              <span id="hotkey-state" class="muted"></span>
+            </div>
+            <p class="hint">出厂默认 <b>Ctrl+Alt+K</b>，装上即生效、不用先登记；按下就等价于点上面的“一键清图”（服务端每 350ms 结算一只怪，重复按会被“上一次还在结算中”挡住）。想换组合：点输入框按新键再点“登记”；点“清除”则彻底不绑定。</p>
+          </div>
           <h2>自动拾取</h2>
-          <p class="hint">常开模式由服务端记住：开着时每只怪掉落都会立即入库（含金币），背包满则该条留在地上记 AUTO_PICKUP_DEFERRED；开关状态写进存档目录的 TestTools/gm-toggles.xml，重启服务端也保留。</p>
           <div class="row">
             <button id="autopick-toggle" type="button">自动拾取：读取中</button>
             <button id="pick-all" type="button">拾取当前地上条目</button>
@@ -196,14 +230,7 @@
               <div class="field">
                 <label class="check"><input id="cfg-one-hit" type="checkbox" />带上测试便利 DNF70_TEST_ONE_HIT_KILL=1（秒怪）</label>
               </div>
-              <h2>一键清图全局快捷键</h2>
-              <p class="hint">游戏窗口有焦点时也能按；按下即对服务端发一次 dungeon-killall（服务端每 350ms 结算一只怪，重复按会被“上一次还在结算中”挡住）。</p>
-              <div class="field inline">
-                <input id="cfg-hotkey" readonly placeholder="点击这里然后按下组合键" />
-                <button id="hotkey-set" type="button">登记</button>
-                <button id="hotkey-clear" type="button">清除</button>
-                <span id="hotkey-state" class="muted"></span>
-              </div>
+              <p class="hint">一键清图的全局快捷键在「副本」页设置（出厂默认 Ctrl+Alt+K）。</p>
               <div class="row">
                 <button id="save-config" class="primary" type="button">保存配置</button>
               </div>

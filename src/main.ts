@@ -35,6 +35,47 @@ const rowsOf = (name: string, child?: string): Row[] => {
 const snap = (key: string): string => attr(state.current?.snapshot, key);
 const number = (key: string): number => Number(snap(key) || 0);
 
+/// 职业中文名由 Rust 侧按 quest-catalog 算好放进快照，读不到时退回枚举号，不猜名字。
+const jobSummary = (): string => snap("jobName") || (snap("job") ? `职业 ${snap("job")}` : "职业 -");
+
+/// 服务端当前把 GM 写入落到哪个角色：实时快照优先，其次握手文件，旧服务端可能两处都没有。
+function boundRoleId(): string {
+  const fromSnapshot = snap("roleId");
+  if (fromSnapshot) return fromSnapshot;
+  return String(state.current?.endpoint?.roleId ?? "");
+}
+
+/// 界面上选中的目标角色，存档直读时就是登录器在读的那个档。
+function targetRoleId(): string {
+  return snap("targetRoleId") || boundRoleId();
+}
+
+/// 客户端占着服务端时目标无法迁移；服务端空闲时返回空串，由 runGm 先重绑再写。
+function writeBlockReason(): string {
+  const bound = boundRoleId();
+  const target = targetRoleId();
+  if (!bound || !target || bound === target) return "";
+  if (number("live") === 1) {
+    return `客户端正在玩角色 ${snap("roleName")}（roleId ${bound}），服务端只认它：要操作 roleId ${target}，请先让玩家退出到选角界面。`;
+  }
+  return "";
+}
+
+const roleOptions = (): Row[] => rowsOf("Roles", "Role");
+
+/// 这些操作会改某个角色的存档，必须跟着 GM 目标角色走；副本/拾取/关服是全局的，不参与重绑。
+const GM_MUTATIONS = ["level", "cash", "gold", "fatigue", "item", "promote", "change-branch", "awaken", "quest-accept", "quest-complete"];
+
+function renderAll(): void {
+  renderStatus();
+  renderService();
+  renderCharacter();
+  renderQuests();
+  renderItems();
+  renderDungeon();
+  refreshControls();
+}
+
 function message(text: string, kind: "info" | "ok" | "bad" = "info") {
   const ticker = element("ticker");
   ticker.textContent = text;
@@ -101,7 +142,7 @@ function renderStatus() {
   setLamp("lamp-gm", Boolean(service.channelUp) && Boolean(current.endpoint), !service.channelUp && Boolean(current.endpoint));
   setLamp("lamp-client", current.gameProcesses.length > 0);
   element("role-summary").textContent = current.snapshot
-    ? `${snap("roleName")} · Lv.${snap("level")} · ${snap("firstGrowName")}${number("secondGrow") ? " · 已一次觉醒" : ""} · 金币 ${snap("gold")}`
+    ? `${snap("roleName")} · ${jobSummary()} · Lv.${snap("level")} · ${snap("firstGrowName")}${number("secondGrow") ? " · 已一次觉醒" : ""} · 金币 ${snap("gold")}`
     : "读不到角色数据";
   const badge = element("mode-badge");
   badge.textContent = current.mode;
@@ -137,45 +178,188 @@ function renderService() {
 
 const QUEST_COLUMNS = ["ID", "任务名", "类型", "目标", "等级段", "接入"];
 
+function renderRolePicker(roles: Row[]): void {
+  const select = element<HTMLSelectElement>("role-target");
+  const target = targetRoleId();
+  const bound = boundRoleId();
+  select.innerHTML = "";
+  if (!roles.length) {
+    const option = document.createElement("option");
+    option.textContent = "角色列表为空（读不到 roles-CX.xml）";
+    option.value = "";
+    select.append(option);
+    element("role-target-state").textContent = `账号里一个角色都没有：${state.current?.note ?? ""}`;
+    return;
+  }
+  for (const row of roles) {
+    const option = document.createElement("option");
+    option.value = attr(row, "id");
+    const level = attr(row, "level") || attr(row, "storedLevel");
+    option.textContent = [
+      attr(row, "name"),
+      attr(row, "jobName") || `职业 ${attr(row, "job")}`,
+      level ? `Lv.${level}` : "",
+      attr(row, "firstGrowName"),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    option.selected = option.value === target;
+    select.append(option);
+  }
+  select.disabled = false;
+  const hint = element("role-target-state");
+  if (bound && target !== bound) {
+    hint.textContent = number("live") === 1
+      ? `服务端此刻绑在 roleId ${bound}（客户端在线），切不过去；下面的写入按钮会先禁用。`
+      : `服务端当前绑在 roleId ${bound}；服务端空闲时下一次写入会自动先切到 roleId ${target}。`;
+  } else if (bound) {
+    hint.textContent = `GM 写入会落到 roleId ${bound}。`;
+  } else {
+    hint.textContent = "读不到服务端绑定态，按存档直读处理这个账号。";
+  }
+}
+
+const BRANCH_HINT = "换分支会把技能点全部退回、觉醒清零，重新按新分支发一次转职赠技；不会动等级/金币/任务。";
+
+/// 未转职的角色发 promote；已转职的角色同样这批按钮改成换分支（发 change-branch，服务端会先洗点再写 grow）。
+function renderPromoteOptions(): void {
+  const wrap = element("promote-options");
+  wrap.innerHTML = "";
+  const options = (state.current?.snapshot?.PromoteOptions as Row[]) ?? [];
+  const promoted = number("firstGrow") !== 0;
+  const op = promoted ? "change-branch" : "promote";
+  const current = snap("firstGrowName");
+  element("promote-label").textContent = promoted
+    ? `转职分支（当前 ${current || "已转职"}，同职业内换分支）`
+    : `转职（当前职业 ${jobSummary()}，一次转职写入 grow 字节并按职业补齐职业技能）`;
+  const hint = element("promote-hint");
+  hint.hidden = !promoted;
+  hint.textContent = promoted ? BRANCH_HINT : "";
+  for (const row of options) {
+    const name = attr(row, "name") || `转职 ${attr(row, "grow")}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.gm = op;
+    button.dataset.grow = attr(row, "grow");
+    button.textContent = promoted ? `换到 ${name}` : name;
+    button.title = promoted
+      ? `${attr(row, "awakening") ? `一次觉醒 ${attr(row, "awakening")} · ` : ""}换到 ${name} 会洗掉全部技能点并清空觉醒，再按新分支发一次转职赠技（grow=${attr(row, "grow")}）`
+      : `${attr(row, "awakening") ? `一次觉醒 ${attr(row, "awakening")} · ` : ""}转职任务 ${attr(row, "questId") || "-"}，写入 grow=${attr(row, "grow")}`;
+    wrap.append(button);
+  }
+  if (!options.length) {
+    const note = document.createElement("span");
+    note.className = "muted";
+    note.textContent = `任务表里没读到 ${jobSummary()} 的转职项，请检查 ${String(state.current?.config?.root ?? "")}\\Server-70s3a3\\data\\quest-catalog.xml。`;
+    wrap.append(note);
+  }
+}
+
 function renderCharacter() {
   const current = state.current;
   if (!current) return;
-  const roles = rowsOf("Roles", "Role");
+  const roles = roleOptions();
+  renderRolePicker(roles);
+  const table = element<HTMLTableElement>("roles-table");
   fill(
-    element<HTMLTableElement>("roles-table"),
-    ["ID", "角色名", "职业", "存档记录等级", "创建时间"],
+    table,
+    ["ID", "角色名", "职业", "等级", "金币", "点券(账号共用)", "一次转职", "创建时间"],
     roles,
-    (row) => [attr(row, "id"), attr(row, "name"), attr(row, "job"), attr(row, "storedLevel"), attr(row, "created")],
+    (row) => [
+      attr(row, "id"),
+      attr(row, "name"),
+      attr(row, "jobName") || `职业 ${attr(row, "job")}`,
+      attr(row, "level") || attr(row, "storedLevel"),
+      attr(row, "gold"),
+      attr(row, "offlineCash"),
+      attr(row, "firstGrowName"),
+      attr(row, "created"),
+    ],
   );
-  const inventoryHint = current.mode === "存档直读" ? "（已用 SP；剩余 SP 需连服务端查看）" : "";
-  pairs(element<HTMLTableElement>("snapshot-table"), [
-    ["账号 / 角色", `${snap("account")} / ${snap("roleName")}（roleId ${snap("roleId")}，job ${snap("job")}）`],
-    ["等级 / 经验", `${snap("level")} / ${snap("experience")}${snap("nextLevelExperience") ? `（下一级门槛 ${snap("nextLevelExperience")}）` : ""}`],
-    ["金币 / 任务点", `${snap("gold")} / ${snap("questPoints")}`],
-    ["技能点", current.mode === "存档直读" ? `${snap("spentSp")} 已用${inventoryHint}` : `剩余 ${snap("sp")}`],
-    ["转职状态", `${snap("firstGrowName")}（grow ${snap("grow")}，一次 ${snap("firstGrow")}，觉醒 ${snap("secondGrow")}）`],
-    ["觉醒技能", snap("awakeningSkill") && snap("awakeningSkill") !== "0" ? `技能 ${snap("awakeningSkill")}` : "无"],
-    ["专家职", snap("expertJob") === "0" ? "无" : `类型 ${snap("expertJob")}`],
-    ["疲劳 / 城镇", `${snap("fatigueRemaining")} / 存档城镇 ${snap("savedTown")}`],
-    ["背包", `${snap("inventoryRows")} 行 / ${snap("inventoryItems")} 件（存档修订 ${snap("revision")}）`],
-    ["任务", `进行中 ${snap("activeCount")}，已完成 ${snap("completedCount")}`],
-    ["连接状态", `live=${snap("live")} selected=${snap("selected")} ready=${snap("ready")}`],
-  ]);
+  const bound = boundRoleId();
+  const target = targetRoleId();
+  roles.forEach((row, index) => {
+    const tr = table.tBodies[0]?.rows[index];
+    if (!tr) return;
+    const id = attr(row, "id");
+    tr.className = id === target ? "selected" : "";
+    tr.title = id === bound ? "服务端当前绑定的角色" : "";
+    tr.onclick = () => {
+      element<HTMLSelectElement>("role-target").value = id;
+      void applyTargetRole(Number(id));
+    };
+  });
+  element<HTMLSpanElement>("fatigue-state").textContent = snap("fatigueRemaining")
+    ? `当前 ${snap("fatigueRemaining")}/156`
+    : "";
+  renderPromoteOptions();
   const promoted = number("firstGrow") !== 0;
   const awakened = number("secondGrow") !== 0;
+  const awakening = snap("awakeningName");
   element<HTMLSpanElement>("grow-state").textContent = promoted
-    ? `当前 ${snap("firstGrowName")}${awakened ? "（已一次觉醒）" : "，可觉醒"}`
-    : "尚未转职";
-  for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('[data-gm="promote"]'))) {
-    button.title = promoted ? "该角色已转职，服务端不允许改第二次" : `写入 grow=${button.dataset.grow}`;
-  }
+    ? `当前 ${snap("firstGrowName")}${awakening ? `，一次觉醒 ${awakening}` : ""}${awakened ? "（已觉醒）" : ""}`
+    : `尚未转职（${jobSummary()}）`;
+  element("awaken-button").textContent = promoted && awakening ? `一次觉醒 → ${awakening}` : "一次觉醒";
+  const blocked = writeBlockReason();
   const gate = element("character-gate");
-  gate.textContent =
-    current.mode === "服务端实时" && snap("ready") === "1"
-      ? "客户端正在城镇里，操作会即时推送到游戏内。"
+  gate.textContent = blocked
+    ? blocked
+    : current.mode === "服务端实时" && snap("ready") === "1"
+      ? `客户端正在城镇里操作 ${snap("roleName")}，改动会即时推送到游戏内。`
       : current.mode === "服务端实时"
         ? "服务端在线但角色不在城镇（未选角或正在副本）：写入存档，回城镇或下次登录后生效。"
         : "服务端空闲：直接写入存档，下次进入城镇生效。";
+}
+
+/// 换 GM 目标：先记进配置（存档直读要靠它选档），服务端空闲时顺手让它重绑一次。
+async function applyTargetRole(roleId: number) {
+  const current = state.current;
+  if (!current || !roleId) return;
+  const row = roleOptions().find((item) => Number(attr(item, "id")) === roleId);
+  if (!row) {
+    message(`角色列表里没有 roleId ${roleId}。`, "bad");
+    return;
+  }
+  current.config.gmRole = roleId;
+  renderCharacter();
+  try {
+    await invoke("save_config", { config: current.config });
+  } catch (error) {
+    message(describe(error), "bad");
+    void refresh(true);
+    return;
+  }
+  if (current.endpoint && boundRoleId() !== String(roleId) && number("live") !== 1) {
+    await rebindTarget(roleId);
+  } else {
+    await refresh(true);
+  }
+}
+
+async function rebindTarget(roleId: number): Promise<boolean> {
+  try {
+    const reply = await invoke<{ message: string }>("gm_command", { op: "role", params: { roleId } });
+    message(`GM 目标已切到 roleId ${roleId}：${reply.message}`, "ok");
+    await refresh(true);
+    return true;
+  } catch (error) {
+    await refresh(true);
+    message(`切换 GM 目标失败：${describe(error)}`, "bad");
+    return false;
+  }
+}
+
+/// 写入类操作必须落在选中的角色上：目标与服务端绑定不一致时先重绑，重绑失败就不写。
+async function ensureTargetBound(op: string): Promise<boolean> {
+  if (!GM_MUTATIONS.includes(op)) return true;
+  const bound = boundRoleId();
+  const target = targetRoleId();
+  if (!bound || !target || bound === target) return true;
+  if (number("live") === 1) {
+    message(writeBlockReason() || "客户端在线时服务端只认它选的角色。", "bad");
+    return false;
+  }
+  return await rebindTarget(Number(target));
 }
 
 /// The 任务 field accepts "806" or "806 转职 - 剑魂 (4/4)"; the leading number is the quest id.
@@ -252,11 +436,7 @@ async function refreshQuestView(button?: HTMLElement) {
   if (button) button.textContent = "读取中…";
   try {
     state.current = await invoke<State>("refresh_state");
-    renderStatus();
-    renderQuests();
-    renderItems();
-    renderDungeon();
-    refreshControls();
+    renderAll();
     const read = element("quest-read-state");
     read.textContent = `${state.current.mode} · 已接 ${snap("activeCount")} / 已完成 ${snap("completedCount")} · ${new Date().toLocaleTimeString()}`;
     message(`任务已重新读取：${state.current.mode}。`, "ok");
@@ -298,15 +478,24 @@ function renderItems() {
   const inventory = rowsOf("Inventory", "Entry");
   fill(
     element<HTMLTableElement>("inventory-table"),
-    ["物品 ID", "名称", "数量", "背包页", "槽位"],
+    ["物品 ID", "名称", "数量", "强化", "品质", "背包页", "槽位"],
     inventory,
-    (row) => [attr(row, "item"), state.names[attr(row, "item")] ?? "…", attr(row, "quantity"), attr(row, "list"), attr(row, "slot")],
+    (row) => [
+      attr(row, "item"),
+      state.names[attr(row, "item")] ?? "…",
+      attr(row, "quantity"),
+      attr(row, "upgrade"),
+      attr(row, "seed"),
+      attr(row, "list"),
+      attr(row, "slot"),
+    ],
   );
   void requestNames(inventory.map((row) => Number(attr(row, "item"))).filter(Number.isFinite));
 }
 
 /// Names come from the local pvfUtility service (PVF item files); ask once per id and refill the
-/// table when the batch lands, so a missing service never blocks the panel.
+/// table when the batch lands. A missing service is normal for players who never opened it, so it
+/// stays silent — the items page hint explains how to turn it on.
 async function requestNames(ids: number[]) {
   const fresh = ids.filter((id) => id > 2 && !state.namesRequested.has(id));
   if (!fresh.length) return;
@@ -317,12 +506,10 @@ async function requestNames(ids: number[]) {
     state.namesOnline = reply.pvfOnline;
     if (!reply.pvfOnline) {
       for (const id of fresh) if (!(id in reply.names)) state.namesRequested.delete(id);
-      message(`PVF 名字服务不可用：${reply.message}`, "bad");
     }
-  } catch (error) {
+  } catch {
     state.namesOnline = false;
     for (const id of fresh) state.namesRequested.delete(id);
-    message(describe(error), "bad");
   }
   renderItems();
   renderItemResults();
@@ -402,13 +589,7 @@ function fillSettings() {
 async function refresh(quiet = false) {
   try {
     state.current = await invoke<State>("refresh_state");
-    renderStatus();
-    renderService();
-    renderCharacter();
-    renderQuests();
-    renderItems();
-    renderDungeon();
-    refreshControls();
+    renderAll();
     if (!quiet) fillSettings();
     if (!quiet) message(state.current.note, "info");
   } catch (error) {
@@ -419,14 +600,19 @@ async function refresh(quiet = false) {
 function refreshControls() {
   const busy = state.busy;
   const current = state.current;
-  const readyForMutation = Boolean(current?.snapshot);
+  const readyForMutation = Boolean(current?.snapshot) && !writeBlockReason();
   const inTown = snap("ready") === "1" || snap("live") !== "1";
   const promoted = number("firstGrow") !== 0;
   const awakened = number("secondGrow") !== 0;
   const live = number("live") === 1;
   const actions: [string, boolean][] = [
     ["[data-gm=\"level\"]", readyForMutation && !busy],
+    ["[data-gm=\"cash\"]", readyForMutation && !busy && Number(element<HTMLInputElement>("cash-amount").value) > 0],
+    ["[data-gm=\"gold\"]", readyForMutation && !busy && Number(element<HTMLInputElement>("gold-amount").value) > 0],
+    ["[data-gm=\"fatigue\"]", readyForMutation && !busy],
     ["[data-gm=\"promote\"]", readyForMutation && !busy && !promoted],
+    // 换分支按钮只在已转职时渲染，所以这里不再判 promoted。
+    ["[data-gm=\"change-branch\"]", readyForMutation && !busy],
     ["[data-gm=\"awaken\"]", readyForMutation && !busy && promoted && !awakened],
     ["[data-gm=\"item\"]", readyForMutation && !busy && Number(element<HTMLInputElement>("item-id").value) > 0],
     ["[data-gm=\"quest-complete\"]", readyForMutation && !busy && selectedQuestId() > 0 && inTown],
@@ -458,19 +644,16 @@ async function runGm(op: string, params: Record<string, unknown>) {
   setBusy(true);
   message(`正在执行 ${op}…`);
   try {
+    if (!(await ensureTargetBound(op))) {
+      message(writeBlockReason() || "服务端没有把 GM 目标切到选中的角色，本次没有写入。", "bad");
+      return;
+    }
     const reply = await invoke<{ op: string; message: string; snapshot: Row }>("gm_command", { op, params });
-    element<HTMLTextAreaElement>("gm-result").value = `${reply.op}：${reply.message}\n\n${JSON.stringify(reply.snapshot, null, 2).slice(0, 4000)}`;
     if (state.current) state.current.snapshot = reply.snapshot;
-    renderStatus();
-    renderCharacter();
-    renderQuests();
-    renderItems();
-    renderDungeon();
-    refreshControls();
+    renderAll();
     message(`${reply.op} 完成：${reply.message}`, "ok");
   } catch (error) {
     const text = describe(error);
-    element<HTMLTextAreaElement>("gm-result").value = text;
     message(`${op} 失败：${text}`, "bad");
   } finally {
     setBusy(false);
@@ -480,13 +663,34 @@ async function runGm(op: string, params: Record<string, unknown>) {
 
 function gmParams(op: string, button?: HTMLButtonElement): Record<string, unknown> {
   if (op === "level") return { to: Number(element<HTMLInputElement>("level-input").value) };
+  if (op === "cash") return { amount: Number(element<HTMLInputElement>("cash-amount").value) };
+  if (op === "gold") return { amount: Number(element<HTMLInputElement>("gold-amount").value) };
   if (op === "promote") return { grow: Number(button?.dataset.grow ?? 0) };
+  if (op === "change-branch") {
+    const params: Record<string, unknown> = { grow: Number(button?.dataset.grow ?? 0) };
+    // 职业号只给登录器本地收窄用（服务端按绑定角色自己判断，不接收这个属性）。
+    const job = snap("job");
+    if (job) params.job = Number(job);
+    return params;
+  }
   if (op === "item") {
-    return {
+    const params: Record<string, unknown> = {
       item: Number(element<HTMLInputElement>("item-id").value),
       count: Number(element<HTMLInputElement>("item-count").value),
       shortcut: element<HTMLInputElement>("item-shortcut").checked ? 1 : 0,
     };
+    // 可选属性只在玩家真填了时才下发：强化 0 是合法值，所以按空串判断，不用真值判断。
+    const optional: [string, string][] = [
+      ["upgrade", "item-upgrade"],
+      ["seed", "item-seed"],
+      ["reseal", "item-reseal"],
+    ];
+    for (const [key, id] of optional) {
+      const raw = element<HTMLInputElement>(id).value.trim();
+      if (raw !== "") params[key] = Number(raw);
+    }
+    if (element<HTMLInputElement>("item-sealed").checked) params.sealed = 1;
+    return params;
   }
   if (op === "quest-complete") {
     const params: Record<string, unknown> = {
@@ -522,13 +726,7 @@ async function service(action: "start" | "stop") {
   try {
     const reply = await invoke<{ service: Row; state: State }>(action === "start" ? "service_start" : "service_stop");
     state.current = reply.state;
-    renderStatus();
-    renderService();
-    renderCharacter();
-    renderQuests();
-    renderItems();
-    renderDungeon();
-    refreshControls();
+    renderAll();
     fillSettings();
     message(String(reply.service.message ?? "已完成。"), reply.service.started || reply.service.stopped ? "ok" : "bad");
   } catch (error) {
@@ -648,6 +846,21 @@ function wire() {
       void runGm(op, gmParams(op, button));
     });
   }
+  // 转职按钮是按职业动态生成的，用容器代理，避免每次重渲染都要重新挂监听；已转职时同一批按钮发的是换分支。
+  element("promote-options").addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("button[data-grow]");
+    if (!button || button.disabled) return;
+    const op = button.dataset.gm ?? "promote";
+    void runGm(op, gmParams(op, button));
+  });
+  for (const id of ["cash-amount", "gold-amount", "item-upgrade", "item-seed", "item-reseal", "item-sealed"]) {
+    const input = element<HTMLInputElement>(id);
+    input.addEventListener("input", refreshControls);
+    input.addEventListener("change", refreshControls);
+  }
+  element<HTMLSelectElement>("role-target").addEventListener("change", (event) => {
+    void applyTargetRole(Number((event.target as HTMLSelectElement).value));
+  });
   element<HTMLInputElement>("item-query").addEventListener("keydown", (event) => {
     if ((event as KeyboardEvent).key === "Enter") void searchItems();
   });
@@ -667,7 +880,19 @@ async function listenRuntimeEvents() {
   });
 }
 
+/// 上次选的目标角色与服务端绑定不一致时，登录器一起来就把它切回去；客户端在线时不抢绑定。
+async function syncTargetRoleOnce(): Promise<void> {
+  const current = state.current;
+  if (!current?.endpoint) return;
+  const target = targetRoleId();
+  if (!target || target === boundRoleId() || number("live") === 1) return;
+  await rebindTarget(Number(target));
+}
+
 void listenRuntimeEvents();
 wire();
-void refresh();
+void (async () => {
+  await refresh();
+  await syncTargetRoleOnce();
+})();
 void loadLogs();

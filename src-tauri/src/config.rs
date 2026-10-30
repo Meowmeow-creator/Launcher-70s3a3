@@ -6,6 +6,11 @@ const ENTRANCE_EXE: &str = "DNF70-Entrance-FG.exe";
 const CHANNEL_SCRIPT: &str = "DNF70-channel-info-CG.etc";
 pub const DEFAULT_CHANNEL_PORT: u16 = 7002;
 pub const DEFAULT_ENTRANCE_PORT: u16 = 17001;
+/// 一键清图的全局快捷键出厂值：RegisterHotKey 的 MOD_CONTROL|MOD_ALT 加 'K'。
+/// 游戏不占 Ctrl+Alt+ 字母，且必须带修饰键，免得吃掉普通按键。
+pub const DEFAULT_HOTKEY_MODIFIERS: u32 = 0x0003;
+pub const DEFAULT_HOTKEY_VIRTUAL_KEY: u32 = 0x4B;
+pub const DEFAULT_HOTKEY_LABEL: &str = "Ctrl+Alt+K";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -25,6 +30,11 @@ pub struct Config {
     pub hotkey_modifiers: u32,
     pub hotkey_vk: u32,
     pub hotkey_label: String,
+    /// 玩家在设置页点过"清除"；没有这个标记就无法区分"老配置没这个字段"和"玩家主动清掉"，
+    /// 出厂默认 Ctrl+Alt+K 会在每次启动时把清掉的绑定又加回来。
+    pub hotkey_cleared: bool,
+    /// GM 操作的目标角色；0 表示还没选，存档直读时落在名册第一个角色上。
+    pub gm_role: i64,
 }
 
 impl Default for Config {
@@ -37,12 +47,14 @@ impl Default for Config {
             channel_port: DEFAULT_CHANNEL_PORT,
             entrance_port: DEFAULT_ENTRANCE_PORT,
             one_hit_kill: false,
-            hotkey_modifiers: 0,
-            hotkey_vk: 0,
-            hotkey_label: String::new(),
+            hotkey_modifiers: DEFAULT_HOTKEY_MODIFIERS,
+            hotkey_vk: DEFAULT_HOTKEY_VIRTUAL_KEY,
+            hotkey_label: DEFAULT_HOTKEY_LABEL.to_string(),
+            hotkey_cleared: false,
             client_dir: root.join("地下城与勇士"),
             client_exe: "DNF70_v50.exe".to_string(),
             launch_arguments: default_launch_arguments(DEFAULT_ENTRANCE_PORT),
+            gm_role: 0,
         }
     }
 }
@@ -181,6 +193,13 @@ fn merge_defaults(mut stored: Config) -> Config {
     if stored.launch_arguments.is_empty() {
         stored.launch_arguments = defaults.launch_arguments;
     }
+    // 已经写盘的老配置里 hotkeyVk 是显式的 0（那会儿还没有出厂绑定），字段缺省补不上来；
+    // 只要玩家没主动清除过，就补上默认组合，启动即能用快捷键清图。
+    if !stored.hotkey_cleared && stored.hotkey_vk == 0 && stored.hotkey_modifiers == 0 {
+        stored.hotkey_modifiers = defaults.hotkey_modifiers;
+        stored.hotkey_vk = defaults.hotkey_vk;
+        stored.hotkey_label = defaults.hotkey_label;
+    }
     stored
 }
 
@@ -222,5 +241,49 @@ mod tests {
         let json = serde_json::to_string(&Config::default()).unwrap();
         assert!(json.contains("channelPort"));
         assert!(json.contains("oneHitKill"));
+        assert!(json.contains("gmRole"));
+    }
+
+    /// 老配置里没有 gmRole，补 0（0 是合法值：还没选目标角色）。
+    #[test]
+    fn an_old_config_without_gm_role_still_loads() {
+        let parsed: Config = serde_json::from_str(r#"{"root":"D:\\70S3A3"}"#).unwrap();
+        assert_eq!(parsed.gm_role, 0);
+    }
+
+    /// 快捷键的出厂值是 Ctrl+Alt+K：老配置里显式写着的 0（那会儿还没有默认绑定）会被补上，
+    /// 而玩家主动点过"清除"的配置必须保持空，否则每次启动又把绑定加回来。
+    #[test]
+    fn a_legacy_config_without_a_binding_gets_the_default_hotkey() {
+        let stored: Config = serde_json::from_str(
+            r#"{"root":"D:\\70S3A3","hotkeyModifiers":0,"hotkeyVk":0,"hotkeyLabel":""}"#,
+        )
+        .unwrap();
+        let merged = merge_defaults(stored);
+        assert_eq!(merged.hotkey_vk, DEFAULT_HOTKEY_VIRTUAL_KEY);
+        assert_eq!(merged.hotkey_modifiers, DEFAULT_HOTKEY_MODIFIERS);
+        assert_eq!(merged.hotkey_label, DEFAULT_HOTKEY_LABEL);
+    }
+
+    #[test]
+    fn an_explicitly_cleared_hotkey_stays_cleared() {
+        let stored: Config = serde_json::from_str(
+            r#"{"root":"D:\\70S3A3","hotkeyModifiers":0,"hotkeyVk":0,"hotkeyLabel":"","hotkeyCleared":true}"#,
+        )
+        .unwrap();
+        let merged = merge_defaults(stored);
+        assert_eq!(merged.hotkey_vk, 0);
+        assert!(merged.hotkey_label.is_empty());
+    }
+
+    /// 玩家自己登记的组合不能被出厂值覆盖。
+    #[test]
+    fn a_registered_hotkey_survives_the_default_merge() {
+        let stored: Config =
+            serde_json::from_str(r#"{"root":"D:\\70S3A3","hotkeyModifiers":6,"hotkeyVk":120,"hotkeyLabel":"Shift+F9"}"#)
+                .unwrap();
+        let merged = merge_defaults(stored);
+        assert_eq!(merged.hotkey_vk, 120);
+        assert_eq!(merged.hotkey_modifiers, 6);
     }
 }

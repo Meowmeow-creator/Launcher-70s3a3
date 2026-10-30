@@ -14,6 +14,11 @@ pub struct Endpoint {
     pub token: String,
     pub pid: u32,
     pub role: String,
+    /// 服务端当前绑定的角色 id；旧服务端的握手文件里没有这个属性，读不到就是空串，
+    /// 绑定态改由 status 快照的 @roleId 给出。
+    pub role_id: String,
+    /// 绑定角色的 job 枚举号，同样可能缺失。
+    pub job: String,
     pub level: String,
     pub ready: bool,
     pub store: String,
@@ -25,6 +30,8 @@ impl Endpoint {
         json!({
             "pid": self.pid,
             "role": self.role,
+            "roleId": self.role_id,
+            "job": self.job,
             "level": self.level,
             "ready": self.ready,
             "store": self.store,
@@ -54,6 +61,8 @@ pub fn endpoint(config: &Config) -> Result<Endpoint, String> {
         token,
         pid: node.attr("pid").and_then(|value| value.parse().ok()).unwrap_or(0),
         role: node.attr("role").unwrap_or_default().to_string(),
+        role_id: node.attr("roleId").unwrap_or_default().to_string(),
+        job: node.attr("job").unwrap_or_default().to_string(),
         level: node.attr("level").unwrap_or_default().to_string(),
         ready: node.flag("ready"),
         store: node.attr("store").unwrap_or_default().to_string(),
@@ -216,5 +225,31 @@ mod tests {
         assert!(node.flag("success"));
         assert_eq!(node.attr("receipt"), Some(id.as_str()));
         assert_eq!(node.to_value()["Snapshot"][0]["@level"], json!("70"));
+    }
+
+    /// 握手文件里的 roleId/job 会被透出；旧服务端没有这两个属性时读成空串，不报错。
+    #[test]
+    fn handshake_reads_the_bound_role_identity() {
+        let directory = std::env::temp_dir().join(format!("launcher-gm-{}", receipt()));
+        let tools = directory.join("TestTools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let path = tools.join(SERVICE_FILE);
+        let mut config = Config::default();
+        config.store = directory.clone();
+        let token = "0123456789abcdef0123456789abcdef";
+
+        std::fs::write(&path, format!("<TestItemService version=\"FG201\" token=\"{token}\" pid=\"4321\" role=\"1234\" roleId=\"2\" job=\"8\" level=\"3\" ready=\"1\"/>")).unwrap();
+        let bound = endpoint(&config).unwrap();
+        assert_eq!(bound.role_id, "2");
+        assert_eq!(bound.job, "8");
+        assert_eq!(bound.to_value()["roleId"], json!("2"));
+        assert_eq!(bound.to_value()["job"], json!("8"));
+
+        std::fs::write(&path, format!("<TestItemService version=\"FG201\" token=\"{token}\" pid=\"4321\" role=\"yoyo\" level=\"70\"/>")).unwrap();
+        let legacy = endpoint(&config).unwrap();
+        assert_eq!(legacy.role_id, "");
+        assert_eq!(legacy.job, "");
+        assert_eq!(legacy.to_value()["roleId"], json!(""));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }
